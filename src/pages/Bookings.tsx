@@ -9,7 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/sonner";
 import { Loader2, Search, Calendar, MapPin, Car, Clock, CreditCard, Filter, ChevronDown, X, CircleCheck, CircleAlert } from "lucide-react";
-import { format, parseISO } from "date-fns";
+import { parseISO } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -247,6 +248,29 @@ const Bookings = () => {
     }
   };
 
+  // Add this utility function at the top level, after imports
+  // Update the convertUTCToIST function
+  const convertUTCToIST = (utcDateString: string) => {
+    try {
+      // First parse the UTC date string
+      let date = parseISO(utcDateString);
+      
+      // Add 5 hours and 30 minutes to adjust for IST
+      date = new Date(date.getTime() + (5.5 * 60 * 60 * 1000));
+      
+      // Format it to IST using the Asia/Kolkata timezone
+      return formatInTimeZone(
+        date,
+        'Asia/Kolkata',
+        "dd MMM yyyy, hh:mm aa 'IST'"
+      );
+    } catch (error) {
+      console.error('Error converting date:', error);
+      return 'Invalid date';
+    }
+  };
+
+  // Update the ActiveBookingsView component's date displays
   const ActiveBookingsView = () => (
     <>
       {filteredActiveBookings.length > 0 ? (
@@ -268,7 +292,7 @@ const Bookings = () => {
                     </Badge>
                   </div>
                   <CardDescription>
-                    {format(parseISO(booking.entry_time), "PPP")}
+                    {convertUTCToIST(booking.entry_time)}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4 flex-grow">
@@ -292,7 +316,7 @@ const Bookings = () => {
                       <Calendar className="h-4 w-4" /> Entry Time
                     </p>
                     <p className="font-medium">
-                      {format(parseISO(booking.entry_time), "p")}
+                      {convertUTCToIST(booking.entry_time)}
                     </p>
                   </div>
                   
@@ -302,7 +326,7 @@ const Bookings = () => {
                         <Clock className="h-4 w-4" /> Exit Time
                       </p>
                       <p className="font-medium">
-                        {format(parseISO(booking.exit_time), "p")}
+                        {convertUTCToIST(booking.exit_time)}
                       </p>
                     </div>
                   )}
@@ -311,7 +335,7 @@ const Bookings = () => {
                     <div>
                       <span className="text-sm text-muted-foreground">Amount:</span>
                       <span className="ml-2 font-semibold">
-                        ${booking.amount_paid.toFixed(2)}
+                        ₹{booking.amount_paid}
                       </span>
                     </div>
                     <Badge className={`${getPaymentStatusColor(booking.payment_status)} capitalize`}>
@@ -419,7 +443,7 @@ const Bookings = () => {
                     </Badge>
                   </div>
                   <CardDescription>
-                    {booking.created_at ? format(parseISO(booking.created_at), "PPP") : 'Unknown date'}
+                    {booking.created_at ? convertUTCToIST(booking.created_at) : 'Unknown date'}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4 flex-grow">
@@ -449,7 +473,7 @@ const Bookings = () => {
                         <Calendar className="h-4 w-4" /> Entry
                       </p>
                       <p className="font-medium">
-                        {format(parseISO(booking.entry_time), "p")}
+                        {convertUTCToIST(booking.entry_time)}
                       </p>
                     </div>
                     
@@ -459,7 +483,7 @@ const Bookings = () => {
                           <Clock className="h-4 w-4" /> Exit
                         </p>
                         <p className="font-medium">
-                          {format(parseISO(booking.exit_time), "p")}
+                          {convertUTCToIST(booking.exit_time)}
                         </p>
                       </div>
                     )}
@@ -469,7 +493,7 @@ const Bookings = () => {
                     <div className="space-y-1">
                       <p className="text-sm text-muted-foreground">Cancelled on</p>
                       <p className="font-medium">
-                        {format(parseISO(booking.cancelled_at), "PPP p")}
+                        {convertUTCToIST(booking.cancelled_at)}
                       </p>
                     </div>
                   )}
@@ -478,7 +502,7 @@ const Bookings = () => {
                     <div>
                       <span className="text-sm text-muted-foreground">Amount:</span>
                       <span className="ml-2 font-semibold">
-                        ${Number(booking.amount_paid).toFixed(2)}
+                        ₹{Number(booking.amount_paid)}
                       </span>
                     </div>
                     <Badge className={`${getPaymentStatusColor(booking.payment_status)} capitalize`}>
@@ -551,6 +575,88 @@ const Bookings = () => {
   function capitalizeFirstLetter(string: string): string {
     return string.charAt(0).toUpperCase() + string.slice(1);
   }
+
+  useEffect(() => {
+    const checkExpiredBookings = async () => {
+      const now = new Date().toISOString();
+      
+      // Find expired bookings
+      const expiredBookings = activeBookings.filter(booking => 
+        booking.exit_time && booking.exit_time < now
+      );
+      
+      for (const booking of expiredBookings) {
+        try {
+          // Get booking details including area information
+          const { data: bookingData, error: bookingError } = await supabase
+            .from("bookings")
+            .select("*, vehicles(customer_name, contact_number), parking_slots(area_id)")
+            .eq("booking_id", booking.booking_id)
+            .single();
+          
+          if (bookingError) throw bookingError;
+          
+          if (!bookingData) {
+            throw new Error("Booking not found");
+          }
+          
+          // Get area name
+          const { data: areaData, error: areaError } = await supabase
+            .from("areas")
+            .select("area_name")
+            .eq("area_id", bookingData.parking_slots?.area_id)
+            .single();
+          
+          if (areaError) throw areaError;
+          
+          // Move to past_booking
+          await supabase
+            .from("past_booking")
+            .insert([
+              {
+                booking_id: booking.booking_id,
+                vehicle_number: booking.vehicle_number,
+                slot_id: booking.slot_id,
+                area_name: areaData?.area_name || "Unknown",
+                entry_time: booking.entry_time,
+                exit_time: booking.exit_time,
+                status: "completed",
+                amount_paid: booking.amount_paid,
+                payment_status: booking.payment_status,
+                customer_name: bookingData.vehicles?.customer_name || "Unknown",
+                contact_number: bookingData.vehicles?.contact_number || "Unknown",
+                created_at: new Date().toISOString(),
+              }
+            ]);
+          
+          // Update slot status
+          await supabase
+            .from("parking_slots")
+            .update({ status: "available" })
+            .eq("slot_id", booking.slot_id);
+          
+          // Delete from active bookings
+          await supabase
+            .from("bookings")
+            .delete()
+            .eq("booking_id", booking.booking_id);
+          
+        } catch (error) {
+          console.error("Error processing expired booking:", error);
+        }
+      }
+      
+      if (expiredBookings.length > 0) {
+        fetchBookings(); // Refresh the bookings list
+      }
+    };
+    
+    // Check for expired bookings every minute
+    const interval = setInterval(checkExpiredBookings, 60000);
+    checkExpiredBookings(); // Initial check
+    
+    return () => clearInterval(interval);
+  }, [activeBookings]);
 
   if (!user) return null;
 
@@ -646,7 +752,7 @@ const Bookings = () => {
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="font-medium">Date</span>
-                  <span>{format(parseISO(bookingToCancel.entry_time), "PPP")}</span>
+                  <span>{convertUTCToIST(bookingToCancel.entry_time)}</span>
                 </div>
               </div>
             )}

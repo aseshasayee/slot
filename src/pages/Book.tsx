@@ -11,10 +11,15 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { format } from "date-fns";
-import { CalendarIcon, Loader2, Check, ArrowRight, MapPin, Car, Building, Clock, CreditCard, Calendar as CalendarIcon2, User, Phone } from "lucide-react";
+import { parseISO } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
+import { CalendarIcon, Loader2, Check, ArrowRight, MapPin, Car, Building, Clock, CreditCard, Calendar as CalendarIcon2, User, Phone, CircleCheck } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 import { motion } from "framer-motion";
+import GoogleMap from "@/components/GoogleMap";
+
+
+// Type definitions
 
 // Type definitions
 type Area = {
@@ -34,7 +39,7 @@ type ParkingSlot = {
 const fadeIn = {
   hidden: { opacity: 0, y: 20 },
   visible: { 
-    opacity: 1, 
+    opacity: 1,
     y: 0,
     transition: { 
       duration: 0.5,
@@ -54,6 +59,15 @@ const staggerChildren = {
   }
 };
 
+// Progress steps for the booking process
+const bookingSteps = [
+  { id: 1, title: "Select Area", icon: Building },
+  { id: 2, title: "Choose Slot", icon: Car },
+  { id: 3, title: "Set Time", icon: Clock },
+  { id: 4, title: "Enter Details", icon: User },
+  { id: 5, title: "Confirm", icon: Check }
+];
+
 const Book = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -63,6 +77,8 @@ const Book = () => {
   const [selectedArea, setSelectedArea] = useState<string>("");
   const [selectedSlot, setSelectedSlot] = useState<string>("");
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
+  const [selectedExitDate, setSelectedExitDate] = useState<Date | undefined>();
+  const [selectedDuration, setSelectedDuration] = useState<string>("");
   const [vehicleNumber, setVehicleNumber] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [contactNumber, setContactNumber] = useState("");
@@ -74,6 +90,7 @@ const Book = () => {
     customerName: false,
     contactNumber: false
   });
+  const [bookingCost, setBookingCost] = useState(0);
 
   useEffect(() => {
     if (!user) {
@@ -164,9 +181,19 @@ const Book = () => {
       return;
     }
     
-    if (currentStep === 3 && !selectedDate) {
-      toast.error("Please select a date");
-      return;
+    if (currentStep === 3) {
+      if (!selectedDate) {
+        toast.error("Please select entry date and time");
+        return;
+      }
+      if (!selectedExitDate) {
+        toast.error("Please select exit date and time");
+        return;
+      }
+      if (selectedExitDate <= selectedDate) {
+        toast.error("Exit time must be after entry time");
+        return;
+      }
     }
     
     if (currentStep === 4) {
@@ -182,6 +209,34 @@ const Book = () => {
   const handlePreviousStep = () => {
     setCurrentStep(currentStep - 1);
   };
+
+  // Convert date to IST for display
+  const convertToIST = (date: Date) => {
+    try {
+      return formatInTimeZone(
+        date,
+        'Asia/Kolkata',
+        "dd MMM yyyy, hh:mm aa 'IST'"
+      );
+    } catch (error) {
+      console.error('Error converting date:', error);
+      return 'Invalid date';
+    }
+  };
+
+  // Calculate booking cost based on duration
+  const calculateBookingCost = () => {
+    if (!selectedDate || !selectedExitDate) return 0;
+    const duration = Math.ceil((selectedExitDate.getTime() - selectedDate.getTime()) / (1000 * 60 * 60));
+    const hourlyRate = 50; // Base rate per hour
+    return duration * hourlyRate;
+  };
+
+  // Update booking cost when dates change
+  useEffect(() => {
+    const cost = calculateBookingCost();
+    setBookingCost(cost);
+  }, [selectedDate, selectedExitDate]);
 
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -247,6 +302,10 @@ const Book = () => {
       
       // Create booking record
       console.log("Creating booking record");
+      // Calculate the booking cost and ensure it's a number
+      const finalBookingCost = calculateBookingCost();
+      console.log("Booking cost calculated:", finalBookingCost);
+      
       const { data: bookingData, error: bookingError } = await supabase
         .from("bookings")
         .insert([
@@ -254,9 +313,10 @@ const Book = () => {
             vehicle_number: vehicleNumber,
             slot_id: selectedSlot,
             entry_time: selectedDate.toISOString(),
+            exit_time: selectedExitDate?.toISOString(),
             status: "booked",
             payment_status: "pending",
-            amount_paid: 0
+            amount_paid: Number(finalBookingCost) // Ensure it's stored as a number
           },
         ])
         .select();
@@ -364,6 +424,108 @@ const Book = () => {
 
   const renderStep = () => {
     switch (currentStep) {
+      case 5:
+        return (
+          <motion.div
+            variants={fadeIn}
+            initial="hidden"
+            animate="visible"
+            className="space-y-6"
+          >
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <CircleCheck className="h-5 w-5 text-primary" />
+                <Label className="text-lg">Booking Summary</Label>
+              </div>
+              <p className="text-sm text-muted-foreground">Review your booking details before confirming</p>
+            </div>
+
+            <Card className="overflow-hidden border border-border/50">
+              <CardContent className="p-6 space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-4">
+                    <div className="flex items-start gap-3">
+                      <Car className="h-5 w-5 text-primary mt-0.5" />
+                      <div>
+                        <p className="font-medium">Vehicle Details</p>
+                        <p className="text-sm text-muted-foreground">{vehicleNumber}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <User className="h-5 w-5 text-primary mt-0.5" />
+                      <div>
+                        <p className="font-medium">Customer Details</p>
+                        <p className="text-sm text-muted-foreground">{customerName}</p>
+                        <p className="text-sm text-muted-foreground">{contactNumber}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="flex items-start gap-3">
+                      <MapPin className="h-5 w-5 text-primary mt-0.5" />
+                      <div>
+                        <p className="font-medium">Parking Location</p>
+                        <p className="text-sm text-muted-foreground">
+                          {areas.find(area => area.area_id === selectedArea)?.area_name} - Slot {selectedSlot.split('-').pop()}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <Clock className="h-5 w-5 text-primary mt-0.5" />
+                      <div>
+                        <p className="font-medium">Booking Time</p>
+                        <p className="text-sm text-muted-foreground">
+                          {selectedDate && convertToIST(selectedDate)}
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          {selectedExitDate && `Until ${convertToIST(selectedExitDate)}`}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-6 border-t border-border/50">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <CreditCard className="h-5 w-5 text-primary" />
+                      <span className="font-medium">Total Cost</span>
+                    </div>
+                    <span className="text-xl font-bold">₹{bookingCost}</span>
+                  </div>
+                  <p className="text-sm text-muted-foreground mt-1">Base rate: ₹50.00 per hour</p>
+                </div>
+              </CardContent>
+            </Card>
+
+            <div className="flex items-center gap-4 pt-4">
+              <Button 
+                type="button" 
+                variant="outline" 
+                onClick={handlePreviousStep}
+                className="flex-1"
+              >
+                Back
+              </Button>
+              <Button 
+                onClick={handleSubmit} 
+                className="flex-1" 
+                disabled={isLoading}
+              >
+                {isLoading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  'Confirm Booking'
+                )}
+              </Button>
+            </div>
+          </motion.div>
+        );
+
       case 1:
         return (
           <motion.div 
@@ -402,36 +564,70 @@ const Book = () => {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.2 }}
-              className="h-80 flex flex-col items-center justify-center gap-4 border border-border/50 rounded-lg bg-gradient-to-br from-background to-muted/30 p-6"
+              className="flex flex-col gap-4"
             >
-              {selectedArea ? (
-                <>
-                  <motion.div 
-                    initial={{ scale: 0.8 }}
-                    animate={{ scale: 1 }}
-                    className="bg-primary/10 p-4 rounded-full"
-                  >
-                    <MapPin className="h-8 w-8 text-primary" />
-                  </motion.div>
-                  <h3 className="text-xl font-semibold">
-                    {areas.find(area => area.area_id === selectedArea)?.area_name}
-                  </h3>
-                  <p className="text-muted-foreground text-center">
-                    Please proceed to the next step to select a parking slot in this area.
-                  </p>
-                </>
-              ) : (
-                <>
-                  <div className="bg-muted/50 p-4 rounded-full">
-                    <MapPin className="h-8 w-8 text-muted-foreground" />
+              {selectedArea && (
+                <div className="mt-4 p-4 border border-border/50 rounded-lg bg-gradient-to-br from-background to-muted/30">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-muted/50 p-2 rounded-full">
+                      <MapPin className="h-5 w-5 text-primary" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold">{areas.find(area => area.area_id === selectedArea)?.area_name}</h3>
+                      <p className="text-sm text-muted-foreground">Selected parking area</p>
+                    </div>
                   </div>
-                  <h3 className="text-xl font-semibold">No Area Selected</h3>
-                  <p className="text-muted-foreground text-center">
-                    Please select a parking area from the dropdown above.
-                  </p>
-                </>
+                </div>
               )}
+              
+              {/* Google Maps Integration */}
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.3 }}
+                className="mt-4"
+              >
+                <div className="rounded-lg overflow-hidden border border-border/50">
+                  <GoogleMap 
+                    selectedArea={areas.find(area => area.area_id === selectedArea) || null}
+                    className="h-[300px] w-full"
+                  />
+                </div>
+                {selectedArea && (
+                  <p className="text-xs text-muted-foreground mt-2 text-center">
+                    Showing route to {areas.find(area => area.area_id === selectedArea)?.area_name}. The route will update as you select different areas.
+                  </p>
+                )}
+              </motion.div>
             </motion.div>
+
+            <div className="flex items-center gap-4 pt-4">
+              <Button 
+                onClick={handleNextStep} 
+                className="w-full" 
+                disabled={!selectedArea}
+              >
+                Continue
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </div>
+
+            {selectedArea && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.4 }}
+                className="flex items-center gap-4 pt-4"
+              >
+                <Button
+                  onClick={handleNextStep}
+                  className="w-full flex items-center justify-center gap-2"
+                >
+                  Continue
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </motion.div>
+            )}
           </motion.div>
         );
       case 2:
@@ -483,6 +679,24 @@ const Book = () => {
                 </motion.button>
               </div>
             </div>
+
+            <div className="flex items-center gap-4 pt-4">
+              <Button 
+                onClick={handlePreviousStep} 
+                variant="outline" 
+                className="flex-1"
+              >
+                Back
+              </Button>
+              <Button 
+                onClick={handleNextStep} 
+                className="flex-1" 
+                disabled={!selectedSlot}
+              >
+                Continue
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </div>
             
             <div className="border border-border/50 rounded-lg p-6 min-h-80">
               <SlotSelector />
@@ -509,7 +723,7 @@ const Book = () => {
               <div className="flex flex-col items-center space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full">
                   <div className="space-y-2">
-                    <Label>Date</Label>
+                    <Label>Entry Date & Time</Label>
                     <Popover>
                       <PopoverTrigger asChild>
                         <Button
@@ -520,7 +734,7 @@ const Book = () => {
                           )}
                         >
                           <CalendarIcon className="mr-2 h-4 w-4" />
-                          {selectedDate ? format(selectedDate, "PPP") : "Select date"}
+                          {selectedDate ? convertToIST(selectedDate) : "Select entry time"}
                         </Button>
                       </PopoverTrigger>
                       <PopoverContent className="w-auto p-0">
@@ -534,6 +748,48 @@ const Book = () => {
                         />
                       </PopoverContent>
                     </Popover>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <Label>Duration</Label>
+                    <Select
+                      value={selectedDuration}
+                      onValueChange={(value) => {
+                        const duration = parseInt(value);
+                        if (selectedDate) {
+                          const exitDate = new Date(selectedDate.getTime());
+                          exitDate.setMinutes(exitDate.getMinutes() + duration);
+                          setSelectedExitDate(exitDate);
+                          setSelectedDuration(value);
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="w-full h-12 border-border/50">
+                        <SelectValue placeholder="Select duration" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {[
+                          { value: "30", label: "30 minutes" },
+                          { value: "60", label: "1 hour" },
+                          { value: "90", label: "1.5 hours" },
+                          { value: "120", label: "2 hours" },
+                          { value: "180", label: "3 hours" },
+                          { value: "240", label: "4 hours" },
+                          { value: "360", label: "6 hours" },
+                          { value: "720", label: "12 hours" },
+                          { value: "1440", label: "24 hours" },
+                        ].map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {selectedExitDate && (
+                      <div className="mt-2 text-sm text-muted-foreground">
+                        Exit time: {convertToIST(selectedExitDate)}
+                      </div>
+                    )}
                   </div>
                 </div>
                 
@@ -613,11 +869,30 @@ const Book = () => {
                 </div>
               </div>
             </div>
+
+            <div className="flex items-center gap-4 pt-4">
+              <Button 
+                type="button" 
+                variant="outline" 
+                onClick={handlePreviousStep}
+                className="flex-1"
+              >
+                Back
+              </Button>
+              <Button 
+                onClick={handleNextStep} 
+                className="flex-1" 
+                disabled={!selectedDate || !selectedExitDate}
+              >
+                Continue
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </div>
           </motion.div>
         );
       case 4:
         return (
-          <motion.div 
+          <motion.div
             variants={fadeIn}
             initial="hidden"
             animate="visible"
@@ -626,90 +901,75 @@ const Book = () => {
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <User className="h-5 w-5 text-primary" />
-                <Label className="text-lg">Your Details</Label>
+                <Label className="text-lg">Enter Details</Label>
               </div>
               <p className="text-sm text-muted-foreground">Please provide your personal information</p>
             </div>
-            
+
             <div className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="vehicleNumber">Vehicle Number</Label>
                 <Input
                   id="vehicleNumber"
                   value={vehicleNumber}
-                  onChange={(e) => {
-                    setVehicleNumber(e.target.value);
-                    if (e.target.value) {
-                      setFormErrors(prev => ({ ...prev, vehicleNumber: false }));
-                    }
-                  }}
-                  placeholder="e.g., ABC123"
-                  className={cn("h-12", formErrors.vehicleNumber ? "border-red-500 focus-visible:ring-red-500" : "")}
+                  onChange={(e) => setVehicleNumber(e.target.value)}
+                  className={formErrors.vehicleNumber ? "border-red-500" : ""}
                 />
                 {formErrors.vehicleNumber && (
-                  <motion.p 
-                    initial={{ opacity: 0, x: -10 }} 
-                    animate={{ opacity: 1, x: 0 }}
-                    className="text-sm text-red-500"
-                  >
-                    Vehicle number is required
-                  </motion.p>
+                  <p className="text-sm text-red-500">Vehicle number is required</p>
                 )}
               </div>
+
               <div className="space-y-2">
                 <Label htmlFor="customerName">Your Name</Label>
                 <Input
                   id="customerName"
                   value={customerName}
-                  onChange={(e) => {
-                    setCustomerName(e.target.value);
-                    if (e.target.value) {
-                      setFormErrors(prev => ({ ...prev, customerName: false }));
-                    }
-                  }}
-                  placeholder="Enter your name"
-                  className={cn("h-12", formErrors.customerName ? "border-red-500 focus-visible:ring-red-500" : "")}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  className={formErrors.customerName ? "border-red-500" : ""}
                 />
                 {formErrors.customerName && (
-                  <motion.p
-                    initial={{ opacity: 0, x: -10 }} 
-                    animate={{ opacity: 1, x: 0 }}
-                    className="text-sm text-red-500"
-                  >
-                    Your name is required
-                  </motion.p>
+                  <p className="text-sm text-red-500">Name is required</p>
                 )}
               </div>
+
               <div className="space-y-2">
                 <Label htmlFor="contactNumber">Contact Number</Label>
                 <Input
                   id="contactNumber"
                   value={contactNumber}
-                  onChange={(e) => {
-                    setContactNumber(e.target.value);
-                    if (e.target.value) {
-                      setFormErrors(prev => ({ ...prev, contactNumber: false }));
-                    }
-                  }}
-                  placeholder="Enter your contact number"
-                  className={cn("h-12", formErrors.contactNumber ? "border-red-500 focus-visible:ring-red-500" : "")}
+                  onChange={(e) => setContactNumber(e.target.value)}
+                  className={formErrors.contactNumber ? "border-red-500" : ""}
                 />
                 {formErrors.contactNumber && (
-                  <motion.p
-                    initial={{ opacity: 0, x: -10 }} 
-                    animate={{ opacity: 1, x: 0 }}
-                    className="text-sm text-red-500"
-                  >
-                    Contact number is required
-                  </motion.p>
+                  <p className="text-sm text-red-500">Contact number is required</p>
                 )}
               </div>
+            </div>
+
+            <div className="flex items-center gap-4 pt-4">
+              <Button 
+                type="button" 
+                variant="outline" 
+                onClick={handlePreviousStep}
+                className="flex-1"
+              >
+                Back
+              </Button>
+              <Button 
+                onClick={handleNextStep} 
+                className="flex-1" 
+                disabled={!vehicleNumber.trim() || !customerName.trim() || !contactNumber.trim()}
+              >
+                Continue
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
             </div>
           </motion.div>
         );
       case 5:
         return (
-          <motion.div 
+          <motion.div
             variants={fadeIn}
             initial="hidden"
             animate="visible"
@@ -751,8 +1011,16 @@ const Book = () => {
                   variants={fadeIn}
                   transition={{ delay: 0.3 }}
                 >
-                  <p className="text-sm text-muted-foreground">Date</p>
-                  <p className="font-medium">{selectedDate ? format(selectedDate, "PPP") : ""}</p>
+                  <p className="text-sm text-muted-foreground">Entry Time</p>
+                  <p className="font-medium">{selectedDate ? convertToIST(selectedDate) : ""}</p>
+                </motion.div>
+                <motion.div 
+                  className="space-y-1"
+                  variants={fadeIn}
+                  transition={{ delay: 0.35 }}
+                >
+                  <p className="text-sm text-muted-foreground">Exit Time</p>
+                  <p className="font-medium">{selectedExitDate ? convertToIST(selectedExitDate) : ""}</p>
                 </motion.div>
                 <motion.div 
                   className="space-y-1"
@@ -806,102 +1074,56 @@ const Book = () => {
   };
 
   return (
-    <div className="min-h-screen py-24 relative">
-      {/* Background elements */}
-      <div className="absolute inset-0 overflow-hidden -z-10">
-        <div className="absolute top-0 left-0 w-1/3 h-1/3 bg-primary/5 rounded-full blur-3xl transform -translate-x-1/2 -translate-y-1/2"></div>
-        <div className="absolute bottom-0 right-0 w-1/2 h-1/2 bg-blue-500/5 rounded-full blur-3xl transform translate-x-1/3 translate-y-1/3"></div>
-        <div className="absolute top-1/4 right-1/4 w-64 h-64 bg-green-500/5 rounded-full blur-3xl"></div>
-      </div>
-      
-      <div className="container mx-auto px-4 max-w-4xl relative">
-        <motion.div 
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6 }}
-          className="max-w-4xl mx-auto"
-        >
-          <h1 className="text-4xl font-bold mb-8 text-center">Book a Parking Slot</h1>
+    <div className="relative">
+      <motion.div 
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="min-h-screen py-24 px-4 bg-gradient-to-br from-background via-background/95 to-primary/5"
+      >
+        <div className="container mx-auto max-w-4xl space-y-8">
+          {/* Header Section */}
+          <div className="text-center space-y-4">
+            <h1 className="text-4xl font-bold tracking-tight bg-gradient-to-r from-primary to-purple-400 bg-clip-text text-transparent">
+              Book Your Slot
+            </h1>
+            <p className="text-muted-foreground max-w-2xl mx-auto">
+              Find and reserve the perfect parking spot for your vehicle
+            </p>
+          </div>
           
-          <Card className="backdrop-blur-lg border border-border/50 shadow-lg">
-            <form onSubmit={(e) => e.preventDefault()}>
-              <CardHeader>
-                <div className="flex justify-between items-center">
-                  <div>
-                    <CardTitle>Booking Process</CardTitle>
-                    <CardDescription>
-                      Complete all steps to book your parking slot
-                    </CardDescription>
-                  </div>
-                  <div>
-                    <span className="text-sm font-medium">Step {currentStep} of 5</span>
-                  </div>
-                </div>
-                
-                <div className="w-full h-2 bg-muted/50 rounded-full mt-4 overflow-hidden">
-                  <motion.div
-                    className="h-full bg-primary"
-                    initial={{ width: `${(currentStep - 1) * 20}%` }}
-                    animate={{ width: `${currentStep * 20}%` }}
-                    transition={{ duration: 0.4 }}
-                  />
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                {renderStep()}
-              </CardContent>
-              <CardFooter className="flex flex-col sm:flex-row-reverse justify-between gap-4">
-                {currentStep < 5 ? (
-                  <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-                    <Button 
-                      type="button" 
-                      onClick={handleNextStep}
-                      className="w-full sm:w-auto"
-                      disabled={
-                        (currentStep === 1 && !selectedArea) || 
-                        (currentStep === 2 && !selectedSlot) || 
-                        (currentStep === 3 && !selectedDate)
-                      }
-                    >
-                      Next Step <ArrowRight className="ml-2 h-4 w-4" />
-                    </Button>
-                  </motion.div>
-                ) : (
-                  <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-                    <Button 
-                      type="button" 
-                      onClick={handleSubmit}
-                      className="w-full sm:w-auto"
-                      disabled={isLoading || !vehicleNumber || !customerName || !contactNumber}
-                    >
-                      {isLoading ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Processing...
-                        </>
-                      ) : (
-                        <>Confirm Booking</>
-                      )}
-                    </Button>
-                  </motion.div>
-                )}
-                
-                {currentStep > 1 && (
-                  <Button 
-                    type="button" 
-                    variant="outline" 
-                    onClick={handlePreviousStep}
-                    className="w-full sm:w-auto"
-                    disabled={isLoading}
+          {/* Progress Steps */}
+          <div className="flex justify-center mb-8">
+            <div className="flex items-center space-x-2 p-2 rounded-full bg-background/50 backdrop-blur-sm border border-border/50 shadow-lg">
+              {bookingSteps.map((step, index) => {
+                const StepIcon = step.icon;
+                return (
+                  <div
+                    key={step.id}
+                    className={cn(
+                      "flex items-center space-x-2 px-4 py-2 rounded-full transition-all duration-300",
+                      currentStep === step.id
+                        ? "bg-primary text-primary-foreground shadow-md"
+                        : currentStep > step.id
+                        ? "text-primary bg-primary/10"
+                        : "text-muted-foreground"
+                    )}
                   >
-                    Back
-                  </Button>
-                )}
-              </CardFooter>
-            </form>
+                    <StepIcon className="h-4 w-4" />
+                    <span className="text-sm font-medium">{step.title}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          
+          {/* Main Content */}
+          <Card className="border-border/50 shadow-xl bg-background/50 backdrop-blur-sm overflow-hidden">
+            <CardContent className="p-6">
+              {renderStep()}
+            </CardContent>
           </Card>
-        </motion.div>
-      </div>
+        </div>
+      </motion.div>
     </div>
   );
 };
